@@ -1,0 +1,1 @@
+# fullcycle.observability_n_opentelemetry
