@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"os/signal"
 )
 
 type CEPRequest struct {
@@ -30,6 +31,17 @@ type WeatherAPIResponse struct {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	otelShutdown, err := SetupOTelSDK(ctx)
+	if err != nil {
+		log.Fatalf("Error setting up OpenTelemetry: %v", err)
+	}
+	defer func() {
+		_ = otelShutdown(context.Background())
+	}()
+
 	// Carrega as variáveis de ambiente do arquivo .env na raiz do projeto
 	envPath, err := filepath.Abs(".env")
 	if err != nil {
@@ -44,13 +56,17 @@ func main() {
 }
 
 func weatherHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Inicio de Servico weatherHandler B")
 	var req CEPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("r.Body: %v", r.Body)
+		log.Printf("req: %v", req)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if len(req.CEP) != 8 {
+		log.Printf("Cep invalido: %v", req.CEP)
 		http.Error(w, "invalid zipcode", http.StatusUnprocessableEntity)
 		return
 	}
@@ -62,6 +78,7 @@ func weatherHandler(w http.ResponseWriter, r *http.Request) {
 
 	location, err := getLocation(ctx, req.CEP)
 	if err != nil {
+		log.Printf("náo encotrou o cep: %v", err)
 		http.Error(w, "can not find zipcode", http.StatusNotFound)
 		return
 	}
@@ -113,6 +130,7 @@ func getLocation(ctx context.Context, cep string) (string, error) {
 }
 
 func getTemperature(ctx context.Context, location string) (float64, error) {
+	log.Printf("Inicio getTemperature")
 	tracer := otel.Tracer("weather-service")
 	ctx, span := tracer.Start(ctx, "get-temperature")
 	defer span.End()
@@ -125,6 +143,7 @@ func getTemperature(ctx context.Context, location string) (float64, error) {
 
 	resp, err := http.Get(fmt.Sprintf("http://api.weatherapi.com/v1/current.json?key=%s&q=%s", apiKey, location))
 	if err != nil {
+		log.Printf("error fetching temperature: %v", err)
 		return 0, err
 	}
 	defer resp.Body.Close()
