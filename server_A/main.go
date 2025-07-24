@@ -1,18 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	//"fmt"
+	"errors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
-	//"go.opentelemetry.io/otel/exporters/zipkin"
-	//"go.opentelemetry.io/otel/semconv/v1.7.0"
-	//"go.opentelemetry.io/otel/sdk/resource"
-	//sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"io/ioutil"
+	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
 )
 
 type CEPRequest struct {
@@ -20,71 +17,68 @@ type CEPRequest struct {
 }
 
 func main() {
-	//initTracer()
-
-	http.HandleFunc("/input", inputHandler)
-	http.ListenAndServe(":8081", otelhttp.NewHandler(http.DefaultServeMux, "input-server"))
+	log.Println("Starting the application...")
+	if err := run(); err != nil {
+		log.Fatalf("Application error: %v", err)
+	}
 }
 
-func inputHandler(w http.ResponseWriter, r *http.Request) {
-	var req CEPRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
+func run() (err error) {
+	log.Println("Setting up signal handling...")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
-	if len(req.CEP) != 8 {
-		http.Error(w, "invalid zipcode", http.StatusUnprocessableEntity)
-		return
-	}
-
-	ctx := r.Context()
-	tracer := otel.Tracer("input-service")
-	ctx, span := tracer.Start(ctx, "forward-to-service-b")
-	defer span.End()
-
-	resp, err := forwardToServiceB(ctx, req.CEP)
+	log.Println("Setting up OpenTelemetry...")
+	otelShutdown, err := SetupOTelSDK(ctx)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Error setting up OpenTelemetry: %v", err)
 		return
+	}
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
+
+	log.Println("Starting HTTP server...")
+	srv := &http.Server{
+		Addr:         ":8081",
+		BaseContext:  func(_ net.Listener) context.Context { return ctx },
+		ReadTimeout:  time.Second,
+		WriteTimeout: 10 * time.Second,
+		Handler:      newHTTPHandler(),
+	}
+	srvErr := make(chan error, 1)
+	go func() {
+		srvErr <- srv.ListenAndServe()
+	}()
+
+	log.Println("Waiting for interruption...")
+	select {
+	case err = <-srvErr:
+		log.Printf("HTTP server error: %v", err)
+		return
+	case <-ctx.Done():
+		log.Println("Received interrupt signal, shutting down...")
+		stop()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response body", http.StatusInternalServerError)
-		return
-	}
-	w.Write(body)
+	log.Println("Shutting down HTTP server...")
+	err = srv.Shutdown(context.Background())
+	return
 }
 
-func forwardToServiceB(ctx context.Context, cep string) (*http.Response, error) {
-	client := http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:8080/weather", nil)
-	if err != nil {
-		return nil, err
+func newHTTPHandler() http.Handler {
+	log.Printf("Setting up HTTP handler...")
+	mux := http.NewServeMux()
+
+	handleFunc := func(pattern string, handlerFunc func(http.ResponseWriter, *http.Request)) {
+		log.Printf("pattern: %v", pattern)
+		handler := otelhttp.WithRouteTag(pattern, http.HandlerFunc(handlerFunc))
+		mux.Handle(pattern, handler)
 	}
+	log.Printf("handleFunc: %v", handleFunc)
+	handleFunc("/input", InputHandler)
 
-	req.Header.Set("Content-Type", "application/json")
-	reqBody, _ := json.Marshal(map[string]string{"cep": cep})
-	req.Body = ioutil.NopCloser(bytes.NewReader(reqBody))
-
-	return client.Do(req)
+	handler := otelhttp.NewHandler(mux, "/")
+	log.Printf("Fim HTTP handler...")
+	return handler
 }
-
-//func initTracer() {
-//	exporter, err := zipkin.New("http://localhost:9411/api/v2/spans")
-//	if err != nil {
-//		fmt.Printf("failed to initialize zipkin exporter: %v\n", err)
-//		return
-//	}
-//
-//	tp := sdktrace.NewTracerProvider(
-//		sdktrace.WithBatcher(exporter),
-//		sdktrace.WithResource(resource.NewWithAttributes(
-//			semconv.ServiceNameKey.String("input-service"),
-//		)),
-//	)
-//	otel.SetTracerProvider(tp)
-//}
