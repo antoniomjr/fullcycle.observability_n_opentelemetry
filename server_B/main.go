@@ -8,11 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-
-	"github.com/joho/godotenv"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
 	"os/signal"
 )
 
@@ -31,28 +26,14 @@ type WeatherAPIResponse struct {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	log.Println("Starting server-b...")
+	
+	_, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	otelShutdown, err := SetupOTelSDK(ctx)
-	if err != nil {
-		log.Fatalf("Error setting up OpenTelemetry: %v", err)
-	}
-	defer func() {
-		_ = otelShutdown(context.Background())
-	}()
-
-	// Carrega as variáveis de ambiente do arquivo .env na raiz do projeto
-	envPath, err := filepath.Abs(".env")
-	if err != nil {
-		log.Fatalf("Error getting absolute path: %v", err)
-	}
-	if err := godotenv.Load(envPath); err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
-	}
-
+	log.Println("Starting HTTP server...")
 	http.HandleFunc("/weather", weatherHandler)
-	http.ListenAndServe(":8080", otelhttp.NewHandler(http.DefaultServeMux, "weather-server"))
+	http.ListenAndServe(":8080", http.DefaultServeMux)
 }
 
 func weatherHandler(w http.ResponseWriter, r *http.Request) {
@@ -72,9 +53,6 @@ func weatherHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	tracer := otel.Tracer("weather-service")
-	ctx, span := tracer.Start(ctx, "get-location-and-temperature")
-	defer span.End()
 
 	location, err := getLocation(ctx, req.CEP)
 	if err != nil {
@@ -105,10 +83,6 @@ func weatherHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getLocation(ctx context.Context, cep string) (string, error) {
-	tracer := otel.Tracer("weather-service")
-	ctx, span := tracer.Start(ctx, "get-location")
-	defer span.End()
-
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -131,9 +105,6 @@ func getLocation(ctx context.Context, cep string) (string, error) {
 
 func getTemperature(ctx context.Context, location string) (float64, error) {
 	log.Printf("Inicio getTemperature")
-	tracer := otel.Tracer("weather-service")
-	ctx, span := tracer.Start(ctx, "get-temperature")
-	defer span.End()
 
 	apiKey := os.Getenv("WEATHER_API_KEY")
 	if apiKey == "" {
