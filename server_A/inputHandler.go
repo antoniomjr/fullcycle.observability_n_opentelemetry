@@ -75,7 +75,7 @@ func InputHandler(w http.ResponseWriter, r *http.Request) {
 func forwardToServiceB(ctx context.Context, cep string) (*http.Response, error) {
 	log.Println("Inicio de forwardToServiceB")
 	client := http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://localhost:8080/weather", nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://server-b:8080/weather", nil)
 	if err != nil {
 		return nil, err
 	}
