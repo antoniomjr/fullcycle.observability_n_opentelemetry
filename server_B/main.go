@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 )
@@ -112,7 +113,7 @@ func getTemperature(ctx context.Context, location string) (float64, error) {
 	}
 	log.Printf("Using WEATHER_API_KEY: %s", apiKey)
 
-	resp, err := http.Get(fmt.Sprintf("http://api.weatherapi.com/v1/current.json?key=%s&q=%s", apiKey, location))
+	resp, err := http.Get(fmt.Sprintf("http://api.weatherapi.com/v1/current.json?key=%s&q=%s", apiKey, url.QueryEscape(location)))
 	if err != nil {
 		log.Printf("error fetching temperature: %v", err)
 		return 0, err
